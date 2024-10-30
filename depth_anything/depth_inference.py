@@ -7,6 +7,7 @@ from transformers import AutoImageProcessor, AutoModelForDepthEstimation
 from dotenv import load_dotenv
 from tqdm import tqdm
 from datetime import datetime
+import time
 
 class DepthEstimator:
     def __init__(self, model_size="Small", device=None, input_size=518, grayscale=False):
@@ -347,13 +348,10 @@ class DepthEstimator:
             return out, output_path
 
     def process_webcam(self):
-        """Process webcam feed in real-time with enhanced saving options and error handling."""
+        """Process webcam feed in real-time."""
         cap = cv2.VideoCapture(0)
         if not cap.isOpened():
             raise IOError("Cannot open webcam")
-        
-        frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         
         print("\nWebcam Controls:")
         print("- Press 'q' to quit")
@@ -361,150 +359,178 @@ class DepthEstimator:
         print("- Press 'd' to save depth map only")
         print("- Press 'b' to save both frames separately")
         print("- Press 'r' to start/stop recording")
-        print("- Press 'm' to change save mode while recording")
+        print("- Press 'm' to change recording mode while recording")
         print("- Press 'p' to pause/resume")
         
         frame_count = 0
         recording = False
-        video_writer = None
-        recording_mode = 'combined'
         paused = False
-        last_frame = None
-        last_depth = None
+        out = None
+        out_depth = None  # Separate writer for depth in "both" mode
+        recording_mode = "combined"  # can be "combined", "depth", or "both"
         
         try:
             while True:
                 if not paused:
                     ret, frame = cap.read()
                     if not ret:
-                        print("Failed to grab frame")
                         break
-                
+                    
                     # Process frame
                     depth_map = self.process_frame(frame)
-                    last_frame = frame.copy()
-                    last_depth = depth_map.copy()
-                else:
-                    # Use last captured frame when paused
-                    frame = last_frame
-                    depth_map = last_depth
-                
-                # Display original and depth side by side
-                combined = np.hstack((frame, depth_map))
-                
-                # Add status overlays
-                status_text = []
-                if recording:
-                    status_text.append(f"Recording: {recording_mode}")
-                if paused:
-                    status_text.append("PAUSED")
-                
-                # Display status
-                y_position = 30
-                for text in status_text:
-                    cv2.putText(combined, text, (10, y_position), 
-                              cv2.FONT_HERSHEY_SIMPLEX, 1, 
-                              (0, 255, 0) if recording else (0, 0, 255), 2)
-                    y_position += 40
-                
-                cv2.imshow('Original | Depth Map', combined)
-                
-                # Handle recording
-                if recording and not paused:
-                    try:
-                        if recording_mode == 'combined':
-                            video_writer.write(combined)
-                        elif recording_mode == 'separate':
-                            video_writer[0].write(frame)
-                            video_writer[1].write(depth_map)
-                        else:  # depth_only
-                            video_writer.write(depth_map)
-                    except Exception as e:
-                        print(f"Recording error: {e}")
-                        recording = False
-                        if recording_mode == 'separate':
-                            video_writer[0].release()
-                            video_writer[1].release()
-                        else:
-                            video_writer.release()
+                    
+                    # Display original and depth side by side
+                    combined = np.hstack((frame, depth_map))
+                    cv2.imshow('Original | Depth Map (Press q:quit, s/d/b:save, r:record, m:mode, p:pause)', combined)
                 
                 # Handle key presses
                 key = cv2.waitKey(1) & 0xFF
-                
                 if key == ord('q'):
                     break
                 elif key == ord('s'):
-                    self.save_frame(frame, depth_map, 'combined')
+                    # Save combined view
+                    timestamp = time.strftime("%Y%m%d_%H%M%S")
+                    output_path = self.output_dir / f"depth_webcam_combined_{timestamp}.jpg"
+                    cv2.imwrite(str(output_path), combined)
+                    print(f"Saved combined frame to {output_path}")
                 elif key == ord('d'):
-                    self.save_frame(frame, depth_map, 'depth_only')
+                    # Save depth map only
+                    timestamp = time.strftime("%Y%m%d_%H%M%S")
+                    output_path = self.output_dir / f"depth_webcam_depth_{timestamp}.jpg"
+                    cv2.imwrite(str(output_path), depth_map)
+                    print(f"Saved depth map to {output_path}")
                 elif key == ord('b'):
-                    self.save_frame(frame, depth_map, 'separate')
-                elif key == ord('p'):
-                    paused = not paused
-                    print("Playback Paused" if paused else "Playback Resumed")
+                    # Save both frames separately
+                    timestamp = time.strftime("%Y%m%d_%H%M%S")
+                    original_path = self.output_dir / f"depth_webcam_original_{timestamp}.jpg"
+                    depth_path = self.output_dir / f"depth_webcam_depth_{timestamp}.jpg"
+                    cv2.imwrite(str(original_path), frame)
+                    cv2.imwrite(str(depth_path), depth_map)
+                    print(f"Saved original to {original_path}")
+                    print(f"Saved depth map to {depth_path}")
                 elif key == ord('r'):
                     if not recording:
+                        # Start recording
+                        timestamp = time.strftime("%Y%m%d_%H%M%S")
                         try:
-                            video_writer, output_path = self.start_recording(
-                                frame_width, frame_height, recording_mode)
+                            # Try different codecs in order of preference
+                            codecs = [
+                                ('mp4v', '.mp4'),  # MP4 codec
+                                ('XVID', '.avi'),  # XVID codec
+                                ('MJPG', '.avi'),  # Motion JPEG
+                            ]
+                            
+                            for codec, ext in codecs:
+                                try:
+                                    fourcc = cv2.VideoWriter_fourcc(*codec)
+                                    
+                                    if recording_mode == "combined":
+                                        output_path = self.output_dir / f"depth_webcam_recording_{timestamp}{ext}"
+                                        out = cv2.VideoWriter(str(output_path), fourcc, 20.0, 
+                                                            (combined.shape[1], combined.shape[0]))
+                                    elif recording_mode == "depth":
+                                        output_path = self.output_dir / f"depth_webcam_depth_recording_{timestamp}{ext}"
+                                        out = cv2.VideoWriter(str(output_path), fourcc, 20.0,
+                                                            (depth_map.shape[1], depth_map.shape[0]))
+                                    else:  # both
+                                        output_path = self.output_dir / f"depth_webcam_original_recording_{timestamp}{ext}"
+                                        output_path_depth = self.output_dir / f"depth_webcam_depth_recording_{timestamp}{ext}"
+                                        out = cv2.VideoWriter(str(output_path), fourcc, 20.0,
+                                                            (frame.shape[1], frame.shape[0]))
+                                        out_depth = cv2.VideoWriter(str(output_path_depth), fourcc, 20.0,
+                                                                (depth_map.shape[1], depth_map.shape[0]))
+                                    
+                                    # Test if writer initialized successfully
+                                    if recording_mode == "both":
+                                        if out is not None and out_depth is not None and out.isOpened() and out_depth.isOpened():
+                                            break
+                                    else:
+                                        if out is not None and out.isOpened():
+                                            break
+                                            
+                                except Exception as e:
+                                    print(f"Failed to initialize {codec} codec: {e}")
+                                    if out is not None:
+                                        out.release()
+                                    if out_depth is not None:
+                                        out_depth.release()
+                                    out = None
+                                    out_depth = None
+                                    continue
+                            
+                            if (recording_mode == "both" and (out is None or out_depth is None)) or \
+                            (recording_mode != "both" and out is None):
+                                print("Failed to initialize any video codec")
+                                continue
+                                
                             recording = True
-                            print(f"Started recording to {output_path}")
-                        except Exception as e:
-                            print(f"Failed to start recording: {e}")
-                    else:
-                        try:
-                            if recording_mode == 'separate':
-                                video_writer[0].release()
-                                video_writer[1].release()
+                            print(f"Started recording in {recording_mode} mode")
+                            if recording_mode == "both":
+                                print(f"Recording to {output_path} and {output_path_depth}")
                             else:
-                                video_writer.release()
-                            recording = False
-                            print("Recording stopped")
+                                print(f"Recording to {output_path}")
+                                
                         except Exception as e:
-                            print(f"Error stopping recording: {e}")
-                
-                elif key == ord('m') and recording:
-                    try:
-                        # Change recording mode
-                        old_mode = recording_mode
-                        if recording_mode == 'combined':
-                            recording_mode = 'separate'
-                        elif recording_mode == 'separate':
-                            recording_mode = 'depth_only'
-                        else:
-                            recording_mode = 'combined'
-                        
-                        # Stop current recording and start new one
-                        if old_mode == 'separate':
-                            video_writer[0].release()
-                            video_writer[1].release()
-                        else:
-                            video_writer.release()
-                        
-                        video_writer, output_path = self.start_recording(
-                            frame_width, frame_height, recording_mode)
-                        print(f"Changed recording mode to: {recording_mode}")
-                        print(f"Continuing recording in {recording_mode} mode to {output_path}")
-                    except Exception as e:
-                        print(f"Error changing recording mode: {e}")
+                            print(f"Error starting recording: {e}")
+                            if out is not None:
+                                out.release()
+                            if out_depth is not None:
+                                out_depth.release()
+                            out = None
+                            out_depth = None
+                            recording = False
+                    else:
+                        # Stop recording
+                        if out is not None:
+                            out.release()
+                        if out_depth is not None:
+                            out_depth.release()
+                        out = None
+                        out_depth = None
                         recording = False
-        
-        except Exception as e:
-            print(f"Error in webcam processing: {e}")
+                        print("Stopped recording")
+                elif key == ord('m') and recording:
+                    # Change recording mode while recording
+                    modes = ["combined", "depth", "both"]
+                    current_idx = modes.index(recording_mode)
+                    recording_mode = modes[(current_idx + 1) % len(modes)]
+                    print(f"Switched to {recording_mode} recording mode")
+                    # Stop current recording and start new one with new mode
+                    if recording:
+                        if out is not None:
+                            out.release()
+                        if out_depth is not None:
+                            out_depth.release()
+                        out = None
+                        out_depth = None
+                        recording = False
+                        key = ord('r')  # Simulate pressing 'r' to start new recording
+                        continue
+                elif key == ord('p'):
+                    # Toggle pause
+                    paused = not paused
+                    status = "Paused" if paused else "Resumed"
+                    print(f"{status} processing")
+                
+                # Write frame if recording
+                if recording and not paused:
+                    if recording_mode == "combined" and out is not None:
+                        out.write(combined)
+                    elif recording_mode == "depth" and out is not None:
+                        out.write(depth_map)
+                    elif recording_mode == "both" and out is not None and out_depth is not None:
+                        out.write(frame)
+                        out_depth.write(depth_map)
         
         finally:
-            try:
-                if recording:
-                    if recording_mode == 'separate':
-                        video_writer[0].release()
-                        video_writer[1].release()
-                    else:
-                        video_writer.release()
-                cap.release()
-                cv2.destroyAllWindows()
-            except Exception as e:
-                print(f"Error during cleanup: {e}")
-    
+            # Clean up
+            if out is not None:
+                out.release()
+            if out_depth is not None:
+                out_depth.release()
+            cap.release()
+            cv2.destroyAllWindows()
+                        
     @property
     def device_info(self):
         """Get information about the current device being used."""
