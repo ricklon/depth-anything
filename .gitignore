@@ -38,7 +38,6 @@ depth_outputs/
 
 # Remove Poetry
 poetry.lock
-pyproject.toml
 
 # UV
 .uv/

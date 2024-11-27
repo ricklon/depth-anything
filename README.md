@@ -24,7 +24,7 @@ Depth estimation using the Depth Anything V2 model. This implementation provides
 
 1. Install uv if you haven't already:
 ```bash
-pipx install uv
+pip install uv
 ```
 
 2. Create and activate virtual environment:
@@ -59,8 +59,21 @@ The package provides two main commands:
 - `webcam`: Process real-time webcam feed
 - `process`: Process images or videos
 
-#### Webcam Mode
+#### Common Use Cases
 
+1. Generate grayscale depth map from a single image:
+```bash
+# Get only the grayscale depth map without the original image
+uv run -m depth_anything.cli process path/to/image.jpg --pred-only --grayscale
+
+# Suppress preview window
+uv run -m depth_anything.cli process path/to/image.jpg --pred-only --grayscale --no-display
+
+# Specify custom output directory
+uv run -m depth_anything.cli process path/to/image.jpg --pred-only --grayscale --no-display --outdir your/output/directory
+```
+
+2. Process webcam feed:
 ```bash
 # Basic webcam usage
 uv run -m depth_anything.cli webcam
@@ -78,6 +91,11 @@ uv run -m depth_anything.cli webcam --device cpu  # or gpu
 Webcam Controls:
 - Press 'q' to quit
 - Press 's' to save current frame
+- Press 'd' to save depth map only
+- Press 'b' to save both frames separately
+- Press 'r' to start/stop recording
+- Press 'm' to change recording mode while recording
+- Press 'p' to pause/resume
 
 #### Processing Images and Videos
 
